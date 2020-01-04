@@ -1,0 +1,2 @@
+defmodule EctoTransit do
+end
