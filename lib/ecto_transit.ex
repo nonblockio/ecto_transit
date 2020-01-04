@@ -1,4 +1,58 @@
 defmodule EctoTransit do
+  @moduledoc """
+  Defines transition rules.
+
+  When used, the transit expects the `:on` and `:rules` as option. The `:on` should
+  be a list of avaliable states or an `EctoEnum` module, and `:rules` should be a map with transition rules.
+  You can use state, list of states or wildcard `:*` in rules.
+  Optional option `:with` could be used to change generated function name (default `:can_transit?`).
+  It will be handy if you defines two transitions in one module.
+
+  States can be any types, though examples are all atom.
+
+      iex> defmodule TODO do
+      ...>   @states ~w(created scheduled doing overdued done closed)a
+      ...>
+      ...>   @transitions %{
+      ...>     :* => :closed,
+      ...>     :created => ~w(scheduled doing)a,
+      ...>     :scheduled => ~w(doing overdued)a,
+      ...>     :doing => ~w(created scheduled done)a
+      ...>   }
+      ...>
+      ...>   use EctoTransit, on: @states, rules: @transitions
+      ...> end
+      iex> TODO.can_transit?(nil, :created)
+      false
+      iex> TODO.can_transit?(:scheduled, :overdued)
+      true
+      iex> TODO.can_transit?(:unknown, :closed)
+      false
+
+  ## Use with `EctoEnum`
+
+    `EctoTransit` is designed for compatibility with `EctoEnum`, while it works well alone.
+
+    Option `:on` can accept an enum module defined by `EctoEnum`,
+
+      iex> defmodule Order do
+      ...>   import EctoEnum
+      ...>   defenum State, ~w(created paid in_deliver done)
+      ...>
+      ...>   @transitions %{
+      ...>     ~w(created paid in_deliver)a => :done,
+      ...>     :created => :paid,
+      ...>     :paid => :in_deliver
+      ...>   }
+      ...>
+      ...>   use EctoTransit, on: State, rules: @transitions, with: :can_continue?
+      ...> end
+      iex> Order.can_continue?(:created, :paid)
+      true
+      iex> Order.can_continue?(:paid, "in_deliver")
+      true
+  """
+
   import Ecto.Changeset
 
   @default_validator :can_transit?
@@ -20,6 +74,66 @@ defmodule EctoTransit do
       def unquote(validator)(_, _), do: false
     end
   end
+
+  @doc """
+  Validate the change on given field follows transition rules.
+
+  This function cannot guarantee transition consistency in concurrency updates thus marked as unsafe.
+  For example, if an change is committed when an check is passed, the follow update
+  might break transition rules, considering an update action of ecto is not conditional.
+
+  Extra lock mechanism is required if you want to ensure consistency.
+  See `Ecto.Query.lock/2` or `Ecto.Changeset.optimistic_lock/3`.
+
+  ## Options
+    * `:message` - the message on failure, defaults to "cannot transit from %{old} to %{new}"
+    * `:required` - if the change on the field is required, defaults to true
+    * `:with` - the function to validate transitions, defaults to :can_transit?.
+      function `fun` can be one of:
+      * atom - called as `apply(mod, fun, [old, new])`, which `mod` is the module that defines the schama of changeset
+      * capture or anonymous function - called as `apply(fun, [changeset, {old, new}])`
+      * {mod, fun, ex_args} - called as `apply(mod, fun, [changeset, {old, new} | ex_args])`
+
+      When `required` is true (by default), `old` and `new` could be the same, meaning there's no change on given field.
+
+  ## Examples
+
+    use defualt `:can_transit?/2`:
+
+      changeset |> unsafe_validate_transit(:state)
+      changeset |> unsafe_validate_transit(:state, message: "%{old} -> %{new} is forbidden")
+
+    use `required: false` to skip check if no change:
+
+      %Post{state: :published}
+      |> change() ## no change
+      |> unsafe_validate_transit(:state, required: false) ## skip check
+
+    use `Post.can_close?/2`:
+
+      %Post{state: :published}
+      |> change(state: :closed)
+      |> unsafe_validate_transit(:state, with: :can_close?)
+
+    use anonymous function like hook:
+
+      recall_message_changeset
+      |> unsafe_validate_transit :state, with: fn changeset, {from, to} ->
+          get_field(changeset, :receive_count) == 0 && match?({:sent, :recalled}, {from, to})
+        end
+      end
+
+    use `Audit.can_change?(changeset, {from, to}, action, metadata)`:
+
+      sensitive_changeset
+      |> unsafe_validate_transit(:state, {Audit, :can_change?, [:update, %{context: nil}]})
+
+    use `Ecto.Query.optimistic_lock/3` to ensure consistency:
+
+      changeset
+      |> unsafe_validate_transit(:state)
+      |> optimistic_lock(:lock_version) # raise if concurrent update happens
+  """
 
   @spec unsafe_validate_transit(Ecto.Changeset.t(), atom, keyword) :: Ecto.Changeset.t()
   def unsafe_validate_transit(%Ecto.Changeset{} = changeset, field, opts \\ []) do
