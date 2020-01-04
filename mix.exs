@@ -16,6 +16,9 @@ defmodule EctoTransit.MixProject do
   end
 
   defp deps do
-    []
+    [
+      {:ecto, ">= 3.0.0"},
+      {:ecto_enum, ">= 1.2.0", only: :test}
+    ]
   end
 end
