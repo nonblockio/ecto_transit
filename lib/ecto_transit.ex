@@ -191,7 +191,7 @@ defmodule EctoTransit do
     do: expand_list_transition(states, from, to)
 
   defp expand_transition(states, from, to) when is_atom(states) do
-    if Code.ensure_compiled?(EctoEnum) and
+    if match?({:module, _}, Code.ensure_compiled(EctoEnum)) and
          function_exported?(states, :__enum_map__, 0) and
          function_exported?(states, :valid_value?, 1) do
       expand_enum_transition(states, from, to)
